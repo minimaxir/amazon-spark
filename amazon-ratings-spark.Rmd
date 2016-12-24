@@ -33,15 +33,6 @@ Note: I added `sparklyr.shell.driver-memory: 8G` to my Spark configuration profi
 
 Usable memory is half the drver memory (since data is replicated 1x), so that config setting will fit 4 GB of data.
 
-Create a 4GB RAMdisk (on OSX) for fastest writes during shuffles / spare the life of the SSDs.
-
-```{r}
-ram_size_GB <- 4
-
-system("diskutil unmount /Volumes/RAMdisk")
-system(sprintf("diskutil erasevolume HFS+ 'RAMdisk' `hdiutil attach -nomount ram://%s`", ram_size_GB * 1024 * 2048))
-```
-
 
 ```{r}
 config <- spark_config()
@@ -177,14 +168,28 @@ df_agg
 ```
 
 
-# Alternate Method of Reading Files into Spark
+# Code Which Did Not Work Out
 
-This method loads files into Spark without the Python preprocessing script, but due to how Spark works (has to repartition everytime a dataset is), it results in a lot of disk activity (~50GB written!)
+## RAMdisk
+
+Create a 4GB RAMdisk (on OSX) for fastest writes during shuffles / spare the life of the SSDs.
+
+Removed because Spark wants *much* more than 4GB!
+
+```{r, eval=FALSE}
+ram_size_GB <- 4
+
+system("diskutil unmount /Volumes/RAMdisk")
+system(sprintf("diskutil erasevolume HFS+ 'RAMdisk' `hdiutil attach -nomount ram://%s`", ram_size_GB * 1024 * 2048))
+```
+
+## Alternate Method of Reading Files into Spark
+
+This method loads files into Spark without the Python preprocessing script, but due to how Spark works (has to repartition everytime a dataset is), it results in a lot of unnecessary disk activity (~50GB written!) since a shuffle write occurs for *each* concatenated dataset.
 
 ```{r, eval=FALSE}
 file_path <- "/Users/maxwoolf/Downloads/amazon_ratings"
 
-# files <- list.files(file_path)
 files <- list.files(file_path)
 files
 ```
