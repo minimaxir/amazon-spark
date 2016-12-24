@@ -5,3 +5,4 @@
 *.nb.html
 *.log
 log*
+.vscode

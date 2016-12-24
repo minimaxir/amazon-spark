@@ -36,7 +36,7 @@ Usable memory is half the drver memory (since data is replicated 1x), so that co
 ```{r}
 config <- spark_config()
 config$`sparklyr.shell.driver-memory` <- "8G"
-config$spark.memory.storageFraction <- 1
+#config$spark.memory.storageFraction <- 1
 
 sc <- spark_connect(master = "local", config = config)
 sc$config
@@ -74,16 +74,17 @@ for (file in files[-1]) {
     mutate(category = clean_name) %>%
     sdf_mutate()
   
-  tbl_cache(sc, "temp")
+  temp
   
   df <- df %>% union(temp)
+  
+  df
 }
 
 
 df <- df %>%
   rename(user_id = V1, item_id = V2, rating = V3, timestamp = V4) %>%
   sdf_register("data")
-
 
 # cache table *before* calling it so latter call is free.
 tbl_cache(sc, "data")
