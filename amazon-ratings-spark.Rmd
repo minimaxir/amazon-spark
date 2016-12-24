@@ -36,65 +36,20 @@ Usable memory is half the drver memory (since data is replicated 1x), so that co
 ```{r}
 config <- spark_config()
 config$`sparklyr.shell.driver-memory` <- "8G"
-#config$spark.memory.storageFraction <- 1
 
 sc <- spark_connect(master = "local", config = config)
 sc$config
 ```
 
+
 ```{r}
 file_path <- "/Users/maxwoolf/Downloads/amazon_ratings"
 
-# files <- list.files(file_path)
-files <- list.files(file_path)
-files
-```
+df <- spark_read_csv(sc, 'data', paste(file_path, "amazon_reviews.csv", sep="/"), header=F, overwrite=T)
 
-
-```{r}
-extract_name <- function(x) {gsub("_", " ", substring(x, 9, nchar(x)-4))}
-extract_name("ratings_Amazon_Instant_Video.csv")
-```
-
-Combine the dataframes together. Additionally, add a column representing the category of data the rating is from.
-
-* Read the data for a base table
-* To add the categories correctly, the evaluation must be nonlazy: use `sdf_mutate()` to force evaluation.
-* Read another table into a temp table, concatenate it to the normal data table, repeat.
-
-```{r}
-clean_name <- extract_name(files[1])
-df <- spark_read_csv(sc, 'load', paste(file_path, files[1], sep="/"), header=F, overwrite=T) %>%
-    mutate(category = clean_name)%>%
-    sdf_mutate()
-
-for (file in files[-1]) {
-  clean_name <- extract_name(file)
-  temp <- spark_read_csv(sc, 'temp', paste(file_path, file, sep="/"), header=F, overwrite=T) %>%
-    mutate(category = clean_name) %>%
-    sdf_mutate()
-  
-  temp
-  
-  df <- df %>% union(temp)
-  
-  df
-}
-
-
-df <- df %>%
-  rename(user_id = V1, item_id = V2, rating = V3, timestamp = V4) %>%
-  sdf_register("data")
-
-# cache table *before* calling it so latter call is free.
 tbl_cache(sc, "data")
-df 
-
-# remove tables which no longer need to be used
-tbl_uncache(sc, "load")
-tbl_uncache(sc, "temp")
+df
 ```
-
 
 Issue occurs when the item_id of an item changes.
 
@@ -208,4 +163,61 @@ df_agg <- df %>%
             collect()
 
 df_agg
+```
+
+
+# Alternate Method of Reading Files into Spark
+
+This method loads files into Spark without the Python preprocessing script, but due to how Spark works (has to repartition everytime a dataset is), it results in a lot of disk activity (~50GB written!)
+
+```{r, eval=FALSE}
+file_path <- "/Users/maxwoolf/Downloads/amazon_ratings"
+
+# files <- list.files(file_path)
+files <- list.files(file_path)
+files
+```
+
+```{r, eval=FALSE}
+extract_name <- function(x) {gsub("_", " ", substring(x, 9, nchar(x)-4))}
+extract_name("ratings_Amazon_Instant_Video.csv")
+```
+
+Combine the dataframes together. Additionally, add a column representing the category of data the rating is from.
+
+* Read the data for a base table
+* To add the categories correctly, the evaluation must be nonlazy: use `sdf_mutate()` to force evaluation.
+* Read another table into a temp table, concatenate it to the normal data table, repeat.
+
+```{r, eval=FALSE}
+clean_name <- extract_name(files[1])
+df <- spark_read_csv(sc, 'load', paste(file_path, files[1], sep="/"), header=F, overwrite=T) %>%
+    mutate(category = clean_name)%>%
+    sdf_mutate()
+
+for (file in files[-1]) {
+  clean_name <- extract_name(file)
+  temp <- spark_read_csv(sc, 'temp', paste(file_path, file, sep="/"), header=F, overwrite=T) %>%
+    mutate(category = clean_name) %>%
+    sdf_mutate()
+  
+  temp
+  
+  df <- df %>% union(temp)
+  
+  df
+}
+
+
+df <- df %>%
+  rename(user_id = V1, item_id = V2, rating = V3, timestamp = V4) %>%
+  sdf_register("data")
+
+# cache table *before* calling it so latter call is free.
+tbl_cache(sc, "data")
+df 
+
+# remove tables which no longer need to be used
+tbl_uncache(sc, "load")
+tbl_uncache(sc, "temp")
 ```
