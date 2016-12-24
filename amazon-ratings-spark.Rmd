@@ -23,7 +23,7 @@ Setup the R packages.
 ```{r setup}
 
 library(dplyr)
-library(readr)
+library(ggplot2)
 library(sparklyr)
 
 sessionInfo()
@@ -39,7 +39,7 @@ I use a 128GB Flash drive for the `spark.local.dir` as a scratch for Shuffle Wri
 ```{r}
 config <- spark_config()
 config$`sparklyr.shell.driver-memory` <- "4G"
-config$spark.local.dir <- "/Volumes/MAX128GB/tmp"
+#config$spark.local.dir <- "/Volumes/MAX128GB/tmp"
 
 sc <- spark_connect(master = "local", config = config)
 sc$config
@@ -89,26 +89,24 @@ Append columns corresponding to the fact that a given rating is the user's *n*th
 ```{r}
 df <- df %>% group_by(user_id) %>% mutate(user_nth = row_number(timestamp)) %>% ungroup()
 
-
 df <- df %>% group_by(item_id) %>% mutate(item_nth = row_number(timestamp)) %>% ungroup()
 ```
 
 Register the transformations as a new Spark DataTable and cache the result (since caches are immutable)
 
 ```{r}
-
 df_t <- df %>% sdf_register("data_t")
 tbl_cache(sc, "data_t")
 
 df_t
 ```
 
-Verify latter query worked correctly by filtering on specific values:
+Verify latter query worked correctly, and table cached correctly, by filtering on specific values:
 
 ```{r}
 sql_render(df_t %>% filter(user_id == "A3BUDYITWUSIS7"))
-df_t %>% filter(user_id == "A3BUDYITWUSIS7")
-df_t %>% filter(item_id == "0739048287")
+df_t %>% filter(user_id == "A3BUDYITWUSIS7") %>% collect()
+df_t %>% filter(item_id == "0739048287") %>% collect()
 ```
 
 
@@ -178,6 +176,80 @@ df_agg <- df_t %>%
 df_agg
 ```
 
+# Distributions of Ratings
+
+Histogram of average ratings by users with atleast 5 reviews (rounded to nearest tenth)
+
+```{r}
+df_agg_users <- df_t %>%
+            group_by(user_id) %>%
+            summarize(count=n(), avg_rating = round(mean(rating), 1)) %>%
+            filter(count >= 5) %>%
+            group_by(avg_rating) %>%
+            summarize(count_avg = n()) %>%
+            arrange(avg_rating) %>%
+            collect()
+
+df_agg_users
+```
+
+```{r}
+plot <- ggplot(df_agg_users, aes(x=avg_rating, y=count_avg)) +
+          geom_bar(stat="identity", fill='#2980b9') +
+          fte_theme() +
+          scale_y_continuous(labels = comma) +
+          labs(title="Distribution of Average User Ratings for Amazon Products", x="Average User Ratings for Amazon Products (5 Ratings Minimum)", y="# of Users")
+
+max_save(plot, "user_histogram", "Amazon")
+```
+
+![](user_histogram.png)
+
+Histogram of average ratings for products with atleast 5 reviews (rounded to nearest tenth)
+
+```{r}
+df_agg_items <- df_t %>%
+            group_by(item_id) %>%
+            summarize(count=n(), avg_rating = round(mean(rating), 1)) %>%
+            filter(count >= 5) %>%
+            group_by(avg_rating) %>%
+            summarize(count_avg = n()) %>%
+            arrange(avg_rating) %>%
+            collect()
+
+df_agg_items
+```
+
+```{r}
+plot <- ggplot(df_agg_items, aes(x=avg_rating, y=count_avg)) +
+          geom_bar(stat="identity", fill='#27ae60') +
+          fte_theme() +
+          scale_y_continuous(labels = comma) +
+          labs(title="Distribution of Average Ratings on Amazon Products", x="Average User Amazon Product Ratings (5 Ratings Minimum)", y="# of Users")
+
+max_save(plot, "item_histogram", "Amazon")
+```
+
+![](item_histogram.png)
+
+Merge the 2 charts together in a density plot.
+
+```{r}
+temp <- (df_agg_users %>% mutate(category="Users", norm=count_avg/sum(count_avg))) %>% union_all(df_agg_items %>% mutate(category="Items", norm=count_avg/sum(count_avg)))
+
+plot <- ggplot(temp, aes(x=avg_rating, y=norm, fill=category)) +
+          geom_density(stat="identity", alpha=0.75, bw=0.2, size=0.25) +
+          fte_theme() +
+          theme(legend.title = element_blank(), legend.position="top", legend.direction="horizontal", legend.key.width=unit(0.5, "cm"), legend.key.height=unit(0.25, "cm"), axis.title.y=element_blank(), axis.text.y=element_blank()) +
+          scale_fill_manual(values=c('#27ae60', '#2980b9')) +
+          labs(title="Distribution of Average Ratings on Amazon Products", x="Average User Amazon Product Ratings (5 Ratings Minimum)")
+
+max_save(plot, "user_item_histogram", "Amazon")
+```
+
+![](user_item_histogram.png)
+
+# Per-Category Analysis
 
 # Code Which Did Not Work Out
 
