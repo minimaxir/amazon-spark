@@ -1,0 +1,210 @@
+---
+title: "Network Visualization of Breached Internet Services Using HaveIBeenPwned Data"
+author: "Max Woolf (@minimaxir)"
+date: "December 19th, 2016"
+output:
+  html_notebook:
+    highlight: tango
+    mathjax: null
+    number_sections: yes
+    theme: spacelab
+    toc: yes
+    toc_float: yes
+---
+
+This R Notebook is the complement to my blog post [Network Visualization of Breached Internet Services Using HaveIBeenPwned Data](http://minimaxir.com/2016/12/pwned-network/).
+
+This notebook is licensed under the MIT License. If you use the code or data visualization designs contained within this notebook, it would be greatly appreciated if proper attribution is given back to this notebook and/or myself. Thanks! :)
+
+# Setup
+
+Setup the R packages.
+
+```{r setup}
+
+library(dplyr)
+library(readr)
+library(sparklyr)
+
+sessionInfo()
+```
+
+Note: I added `sparklyr.shell.driver-memory: 8G` to my Spark configuration profile to ensure there is enough memory for the entire dataset to fit in it for a single-client user. (otherwise it will write a LOT of data to disk!)
+
+Usable memory is half the drver memory (since data is replicated 1x), so that config setting will fit 4 GB of data.
+
+```{r}
+config <- spark_config()
+config$`sparklyr.shell.driver-memory` <- "8G"
+config$spark.memory.storageFraction <- 1
+
+sc <- spark_connect(master = "local", config = config)
+sc$config
+```
+
+```{r}
+file_path <- "/Users/maxwoolf/Downloads/amazon_ratings"
+
+# files <- list.files(file_path)
+files <- list.files(file_path)
+files
+```
+
+
+```{r}
+extract_name <- function(x) {gsub("_", " ", substring(x, 9, nchar(x)-4))}
+extract_name("ratings_Amazon_Instant_Video.csv")
+```
+
+Combine the dataframes together. Additionally, add a column representing the category of data the rating is from.
+
+* Read the data for a base table
+* To add the categories correctly, the evaluation must be nonlazy: use `sdf_mutate()` to force evaluation.
+* Read another table into a temp table, concatenate it to the normal data table, repeat.
+
+```{r}
+clean_name <- extract_name(files[1])
+df <- spark_read_csv(sc, 'load', paste(file_path, files[1], sep="/"), header=F, overwrite=T) %>%
+    mutate(category = clean_name)%>%
+    sdf_mutate()
+
+for (file in files[-1]) {
+  clean_name <- extract_name(file)
+  temp <- spark_read_csv(sc, 'temp', paste(file_path, file, sep="/"), header=F, overwrite=T) %>%
+    mutate(category = clean_name) %>%
+    sdf_mutate()
+  
+  tbl_cache(sc, "temp")
+  
+  df <- df %>% union(temp)
+}
+
+
+df <- df %>%
+  rename(user_id = V1, item_id = V2, rating = V3, timestamp = V4) %>%
+  sdf_register("data")
+
+
+# cache table *before* calling it so latter call is free.
+tbl_cache(sc, "data")
+df 
+
+# remove tables which no longer need to be used
+tbl_uncache(sc, "load")
+tbl_uncache(sc, "temp")
+```
+
+
+Issue occurs when the item_id of an item changes.
+
+Dedupe cases where the `user_id` is equal to the `timestamp`, as it is impossible for users to give a review at the same time for multiple products.
+
+```{r}
+df <- df %>% group_by(user_id, timestamp) %>% filter(row_number(timestamp) == 1) %>% ungroup()
+```
+
+## Additional Attributes
+
+Add columns representing the timestamp as appropriate date/time values.
+
+To convert an <int> timestamp to a <string> represting the timestamp, use `from_unixtime` (via [Stack Overflow](http://stackoverflow.com/a/37569855)). Day of week requires a [special function](http://stackoverflow.com/questions/25006607/how-to-get-day-of-week-in-sparksql).
+
+The time zone is in the time zone of the system running it (in my case, PST).
+
+```{r}
+df <- df %>% mutate(timestamp_f = from_unixtime(timestamp)) %>% sdf_mutate()
+
+df <- df %>% mutate(hour = hour(timestamp_f),
+                    dayofweek = date_format(timestamp_f, 'EEEE'),
+                    month = month(timestamp_f),
+                    year = year(timestamp_f)) %>% sdf_mutate()
+
+df %>% select(timestamp, timestamp_f, hour, dayofweek, month, year)
+```
+
+
+Append columns corresponding to the fact that a given rating is the user's *n*th rating, and the item's *n*th rating.
+
+```{r}
+df <- df %>% group_by(user_id) %>% mutate(user_nth = row_number(timestamp)) %>% ungroup() %>%
+    sdf_mutate()
+
+df <- df %>% group_by(item_id) %>% mutate(item_nth = row_number(timestamp)) %>% ungroup() %>%
+    sdf_mutate()
+
+tbl_cache(sc, "data")
+df
+```
+
+Verify latter query worked correctly by filtering on specific values:
+
+```{r}
+df %>% filter(user_id == "A3BUDYITWUSIS7")
+df %>% filter(item_id == "0739048287")
+```
+
+
+
+# Exploratory Analysis
+
+Average item rating by type.
+
+```{r}
+df_agg <- df %>%
+            group_by(category) %>%
+            summarize(count=n(), avg_rating = mean(rating)) %>%
+            arrange(desc(avg_rating)) %>%
+            collect()
+
+df_agg
+```
+
+Average rating by *n*th user review.
+
+```{r}
+df_agg <- df %>%
+            filter(user_nth <= 50) %>%
+            group_by(user_nth) %>%
+            summarize(count=n(), avg_rating = mean(rating)) %>%
+            arrange(user_nth) %>%
+            collect()
+
+df_agg
+```
+
+Average rating by *n*th item review.
+
+```{r}
+df_agg <- df %>%
+            filter(item_nth <= 50) %>%
+            group_by(item_nth) %>%
+            summarize(count=n(), avg_rating = mean(rating)) %>%
+            arrange(item_nth) %>%
+            collect()
+
+df_agg
+```
+
+Aggregate by Day of Week and Hour. Unfortunately, this confirms that timestamps are truncated to Day, making the Hour useless, and Day of Week, at the least, has no impact on rating.
+
+```{r}
+df_agg <- df %>%
+            group_by(dayofweek, hour) %>%
+            summarize(count=n(), avg_rating = mean(rating)) %>%
+            arrange(dayofweek, hour) %>%
+            collect()
+
+df_agg
+```
+
+Aggregate by Month and Year .
+
+```{r}
+df_agg <- df %>%
+            group_by(year, month) %>%
+            summarize(count=n(), avg_rating = mean(rating)) %>%
+            arrange(year, month) %>%
+            collect()
+
+df_agg
+```
