@@ -33,11 +33,13 @@ Note: I added `sparklyr.shell.driver-memory: 8G` to my Spark configuration profi
 
 Usable memory is half the drver memory (since data is replicated 1x), so that config setting will fit 4 GB of data.
 
+I use a 128GB Flash drive for the `spark.local.dir` as a scratch for Shuffle Write when necessary. (note; has 60MB/s write, so it will bottleneck on insane writes). However, it will not destroy valuable SSDs. Comment out the line if that is not an issue.
+
 
 ```{r}
 config <- spark_config()
 config$`sparklyr.shell.driver-memory` <- "4G"
-config$spark.local.dir <- "/Volumes/RAMdisk"
+config$spark.local.dir <- "/Volumes/MAX128GB/tmp"
 
 sc <- spark_connect(master = "local", config = config)
 sc$config
@@ -47,9 +49,10 @@ sc$config
 ```{r}
 file_path <- "/Users/maxwoolf/Downloads/amazon_ratings"
 
-df <- spark_read_csv(sc, 'data', paste(file_path, "amazon_ratings.csv", sep="/"), header=T, overwrite=T)
+# do not cache the initial data set; only cache the final result
 
-tbl_cache(sc, "data")
+df <- spark_read_csv(sc, 'data', paste(file_path, "amazon_ratings.csv", sep="/"), header=T, overwrite=T, memory=F)
+
 df
 ```
 
@@ -77,28 +80,35 @@ df <- df %>% mutate(hour = hour(timestamp_f),
                     month = month(timestamp_f),
                     year = year(timestamp_f)) %>% sdf_mutate()
 
-df %>% select(timestamp, timestamp_f, hour, dayofweek, month, year) %>% head(10)
+# df %>% select(timestamp, timestamp_f, hour, dayofweek, month, year)
 ```
 
 
 Append columns corresponding to the fact that a given rating is the user's *n*th rating, and the item's *n*th rating.
 
 ```{r}
-df <- df %>% group_by(user_id) %>% mutate(user_nth = row_number(timestamp)) %>% ungroup() %>%
-    sdf_mutate()
+df <- df %>% group_by(user_id) %>% mutate(user_nth = row_number(timestamp)) %>% ungroup()
 
-df <- df %>% group_by(item_id) %>% mutate(item_nth = row_number(timestamp)) %>% ungroup() %>%
-    sdf_mutate()
 
-tbl_cache(sc, "data")
-df
+df <- df %>% group_by(item_id) %>% mutate(item_nth = row_number(timestamp)) %>% ungroup()
+```
+
+Register the transformations as a new Spark DataTable and cache the result (since caches are immutable)
+
+```{r}
+
+df_t <- df %>% sdf_register("data_t")
+tbl_cache(sc, "data_t")
+
+df_t
 ```
 
 Verify latter query worked correctly by filtering on specific values:
 
 ```{r}
-df %>% filter(user_id == "A3BUDYITWUSIS7")
-df %>% filter(item_id == "0739048287")
+sql_render(df_t %>% filter(user_id == "A3BUDYITWUSIS7"))
+df_t %>% filter(user_id == "A3BUDYITWUSIS7")
+df_t %>% filter(item_id == "0739048287")
 ```
 
 
@@ -108,7 +118,7 @@ df %>% filter(item_id == "0739048287")
 Average item rating by type.
 
 ```{r}
-df_agg <- df %>%
+df_agg <- df_t %>%
             group_by(category) %>%
             summarize(count=n(), avg_rating = mean(rating)) %>%
             arrange(desc(avg_rating)) %>%
@@ -120,7 +130,7 @@ df_agg
 Average rating by *n*th user review.
 
 ```{r}
-df_agg <- df %>%
+df_agg <- df_t %>%
             filter(user_nth <= 50) %>%
             group_by(user_nth) %>%
             summarize(count=n(), avg_rating = mean(rating)) %>%
@@ -133,7 +143,7 @@ df_agg
 Average rating by *n*th item review.
 
 ```{r}
-df_agg <- df %>%
+df_agg <- df_t %>%
             filter(item_nth <= 50) %>%
             group_by(item_nth) %>%
             summarize(count=n(), avg_rating = mean(rating)) %>%
@@ -146,7 +156,7 @@ df_agg
 Aggregate by Day of Week and Hour. Unfortunately, this confirms that timestamps are truncated to Day, making the Hour useless, and Day of Week, at the least, has no impact on rating.
 
 ```{r}
-df_agg <- df %>%
+df_agg <- df_t %>%
             group_by(dayofweek, hour) %>%
             summarize(count=n(), avg_rating = mean(rating)) %>%
             arrange(dayofweek, hour) %>%
@@ -158,8 +168,9 @@ df_agg
 Aggregate by Month and Year .
 
 ```{r}
-df_agg <- df %>%
+df_agg <- df_t %>%
             group_by(year, month) %>%
+            filter(year >= 2000) %>%
             summarize(count=n(), avg_rating = mean(rating)) %>%
             arrange(year, month) %>%
             collect()
