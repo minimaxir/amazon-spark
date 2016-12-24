@@ -33,9 +33,20 @@ Note: I added `sparklyr.shell.driver-memory: 8G` to my Spark configuration profi
 
 Usable memory is half the drver memory (since data is replicated 1x), so that config setting will fit 4 GB of data.
 
+Create a 4GB RAMdisk (on OSX) for fastest writes during shuffles / spare the life of the SSDs.
+
+```{r}
+ram_size_GB <- 4
+
+system("diskutil unmount /Volumes/RAMdisk")
+system(sprintf("diskutil erasevolume HFS+ 'RAMdisk' `hdiutil attach -nomount ram://%s`", ram_size_GB * 1024 * 2048))
+```
+
+
 ```{r}
 config <- spark_config()
-config$`sparklyr.shell.driver-memory` <- "8G"
+config$`sparklyr.shell.driver-memory` <- "4G"
+config$spark.local.dir <- "/Volumes/RAMdisk"
 
 sc <- spark_connect(master = "local", config = config)
 sc$config
@@ -45,7 +56,7 @@ sc$config
 ```{r}
 file_path <- "/Users/maxwoolf/Downloads/amazon_ratings"
 
-df <- spark_read_csv(sc, 'data', paste(file_path, "amazon_reviews.csv", sep="/"), header=F, overwrite=T)
+df <- spark_read_csv(sc, 'data', paste(file_path, "amazon_ratings.csv", sep="/"), header=T, overwrite=T)
 
 tbl_cache(sc, "data")
 df
@@ -75,7 +86,7 @@ df <- df %>% mutate(hour = hour(timestamp_f),
                     month = month(timestamp_f),
                     year = year(timestamp_f)) %>% sdf_mutate()
 
-df %>% select(timestamp, timestamp_f, hour, dayofweek, month, year)
+df %>% select(timestamp, timestamp_f, hour, dayofweek, month, year) %>% head(10)
 ```
 
 
