@@ -39,7 +39,7 @@ I use a 128GB Flash drive for the `spark.local.dir` as a scratch for Shuffle Wri
 ```{r}
 config <- spark_config()
 config$`sparklyr.shell.driver-memory` <- "4G"
-#config$spark.local.dir <- "/Volumes/MAX128GB/tmp"
+config$spark.local.dir <- "/Volumes/MAX128GB/tmp"
 
 sc <- spark_connect(master = "local", config = config)
 sc$config
@@ -56,13 +56,6 @@ df <- spark_read_csv(sc, 'data', paste(file_path, "amazon_ratings.csv", sep="/")
 df
 ```
 
-Issue occurs when the item_id of an item changes.
-
-Dedupe cases where the `user_id` is equal to the `timestamp`, as it is impossible for users to give a review at the same time for multiple products.
-
-```{r}
-df <- df %>% group_by(user_id, timestamp) %>% filter(row_number(timestamp) == 1) %>% ungroup()
-```
 
 ## Additional Attributes
 
@@ -73,16 +66,13 @@ To convert an <int> timestamp to a <string> represting the timestamp, use `from_
 The time zone is in the time zone of the system running it (in my case, PST).
 
 ```{r}
-df <- df %>% mutate(timestamp_f = from_unixtime(timestamp)) %>% sdf_mutate()
+df <- df %>% mutate(timestamp_f = from_unixtime(timestamp))
 
 df <- df %>% mutate(hour = hour(timestamp_f),
                     dayofweek = date_format(timestamp_f, 'EEEE'),
                     month = month(timestamp_f),
-                    year = year(timestamp_f)) %>% sdf_mutate()
-
-# df %>% select(timestamp, timestamp_f, hour, dayofweek, month, year)
+                    year = year(timestamp_f))
 ```
-
 
 Append columns corresponding to the fact that a given rating is the user's *n*th rating, and the item's *n*th rating.
 
@@ -251,6 +241,127 @@ max_save(plot, "user_item_histogram", "Amazon")
 
 # Per-Category Analysis
 
+# Rating Breakdown Across *n*th Rating
+
+Breakdown accross *n*th user rating.
+
+```{r}
+df_breakdown_users <- df_t %>%
+            filter(user_nth <= 50) %>%
+            group_by(user_nth, rating) %>%
+            summarize(count=n()) %>%
+            arrange(user_nth, rating) %>%
+            collect()
+
+df_breakdown_users %>% head(10)
+```
+
+```{r}
+plot <- ggplot(df_breakdown_users, aes(x=user_nth, y=count, fill=as.factor(rating))) +
+          geom_bar(stat="identity", position = "fill") +
+          fte_theme() +
+          scale_y_continuous(labels = percent) +
+  theme(legend.title = element_blank(), legend.position="top", legend.direction="horizontal", legend.key.width=unit(0.5, "cm"), legend.key.height=unit(0.25, "cm")) +
+          labs(title="Distribution of Average User Ratings for Amazon Products", x="Average User Ratings for Amazon Products (5 Ratings Minimum)", y="# of Users")
+
+max_save(plot, "user_nth_breakdown", "Amazon")
+```
+
+![](user_nth_breakdown.png)
+
+Breakdown accross *n*th item rating.
+
+```{r}
+df_breakdown_items <- df_t %>%
+            filter(item_nth <= 50) %>%
+            group_by(item_nth, rating) %>%
+            summarize(count=n()) %>%
+            arrange(item_nth, rating) %>%
+            collect()
+
+df_breakdown_items %>% head(10)
+```
+
+```{r}
+plot <- ggplot(df_breakdown_items, aes(x=item_nth, y=count, fill=as.factor(rating))) +
+          geom_bar(stat="identity", position = "fill") +
+          fte_theme() +
+          scale_y_continuous(labels = percent) +
+  theme(legend.title = element_blank(), legend.position="top", legend.direction="horizontal", legend.key.width=unit(0.5, "cm"), legend.key.height=unit(0.25, "cm")) +
+          labs(title="Distribution of Average User Ratings for Amazon Products", x="Average User Ratings for Amazon Products (5 Ratings Minimum)", y="# of Users")
+
+max_save(plot, "item_nth_breakdown", "Amazon")
+```
+
+![](item_nth_breakdown.png)
+
+Breakdown over time.
+
+```{r}
+df_breakdown_time <- df_t %>%
+            filter(year >= 2000) %>%
+            group_by(year, month, rating) %>%
+            summarize(count=n()) %>%
+            arrange(year, month, rating) %>%
+            collect() %>%
+            mutate(date = as.Date(paste(year, month, "01", sep='-')))
+
+df_breakdown_time %>% head(10)
+```
+
+```{r}
+plot <- ggplot(df_breakdown_time, aes(x=date, y=count, fill=as.factor(rating))) +
+          geom_bar(stat="identity", position = "fill", width=32) +
+          fte_theme() +
+          scale_x_date(breaks=date_breaks('2 years'), date_labels = "%Y") +
+          scale_y_continuous(labels = percent) +
+  theme(legend.title = element_blank(), legend.position="top", legend.direction="horizontal", legend.key.width=unit(0.5, "cm"), legend.key.height=unit(0.25, "cm")) +
+          labs(title="Distribution of Average User Ratings for Amazon Products", x="Average User Ratings for Amazon Products (5 Ratings Minimum)", y="# of Users")
+
+max_save(plot, "time_breakdown", "Amazon")
+```
+
+![](time_breakdown.png)
+
+Breakdown by Category (tricker to plot). Also include averages.
+
+```{r}
+df_breakdown_category <- df_t %>%
+            group_by(category, rating) %>%
+            summarize(count=n()) %>%
+            arrange(category, rating) %>%
+            collect()
+
+df_breakdown_category %>% head(10)
+
+
+df_breakdown_category_avg  <- df_t %>%
+            group_by(category) %>%
+            summarize(avg_rating = mean(rating), sd_mean = sd(rating)/sqrt(n())) %>%
+            arrange(desc(avg_rating)) %>%
+            collect()
+
+df_breakdown_category_avg
+
+```
+
+```{r}
+df_breakdown_category$category <- factor(df_breakdown_category$category, levels=rev(df_breakdown_category_avg$category))
+
+plot <- ggplot(df_breakdown_category, aes(x=category, y=count, fill=as.factor(rating))) +
+          geom_bar(stat="identity", position = "fill") +
+          fte_theme() +
+          coord_flip() +
+          scale_y_continuous(labels = percent) +
+  theme(legend.title = element_blank(), legend.position="top", legend.direction="horizontal", legend.key.width=unit(0.5, "cm"), legend.key.height=unit(0.25, "cm")) +
+          labs(title="Distribution of Average User Ratings for Amazon Products", x="Average User Ratings for Amazon Products (5 Ratings Minimum)", y="# of Users")
+
+max_save(plot, "category_breakdown", "Amazon")
+```
+
+
+![](category_breakdown.png)
+
 # Code Which Did Not Work Out
 
 ## RAMdisk
@@ -319,4 +430,12 @@ df
 # remove tables which no longer need to be used
 tbl_uncache(sc, "load")
 tbl_uncache(sc, "temp")
+```
+
+## Dedupe
+
+This was a dedupe to remove cases where reviews by a person had the same timestamp; the true cause of that behavior was the Day truncation of the timestamp.
+
+```{r}
+df <- df %>% group_by(user_id, timestamp) %>% filter(row_number(timestamp) == 1) %>% ungroup()
 ```
