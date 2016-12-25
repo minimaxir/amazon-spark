@@ -76,10 +76,12 @@ df <- df %>% mutate(hour = hour(timestamp_f),
 
 Append columns corresponding to the fact that a given rating is the user's *n*th rating, and the item's *n*th rating.
 
-```{r}
-df <- df %>% group_by(user_id) %>% mutate(user_nth = row_number(timestamp)) %>% ungroup()
+Because the timestamps are truncated to Day, ties are possible. If a tie is present, give the ranking the same *n*th value, since it's better than losing date.
 
-df <- df %>% group_by(item_id) %>% mutate(item_nth = row_number(timestamp)) %>% ungroup()
+```{r}
+df <- df %>% group_by(user_id) %>% mutate(user_nth = min_rank(timestamp)) %>% ungroup()
+
+df <- df %>% group_by(item_id) %>% mutate(item_nth = min_rank(timestamp)) %>% ungroup()
 ```
 
 Register the transformations as a new Spark DataTable and cache the result (since caches are immutable)
