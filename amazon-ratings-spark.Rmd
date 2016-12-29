@@ -26,6 +26,10 @@ library(dplyr)
 library(ggplot2)
 library(sparklyr)
 
+source("Rstart.R")
+```
+
+```{r}
 sessionInfo()
 ```
 
@@ -38,10 +42,11 @@ I use a 128GB Flash drive for the `spark.local.dir` as a scratch for Shuffle Wri
 
 ```{r}
 config <- spark_config()
-config$`sparklyr.shell.driver-memory` <- "4G"
+config$`sparklyr.shell.driver-memory` <- "8G"
 config$spark.local.dir <- "/Volumes/MAX128GB/tmp"
 
-sc <- spark_connect(master = "local", config = config)
+# Spark 2.1.0 was released but not supported by sparklyr at time of writing
+sc <- spark_connect(master = "local", config = config, version="2.0.2")
 sc$config
 ```
 
@@ -49,13 +54,18 @@ sc$config
 ```{r}
 file_path <- "/Users/maxwoolf/Downloads/amazon_ratings"
 
-# do not cache the initial data set; only cache the final result
+# do not cache the initial data set to save memory; only cache the final result
 
 df <- spark_read_csv(sc, 'data', paste(file_path, "amazon_ratings.csv", sep="/"), header=T, overwrite=T, memory=F)
 
 df
 ```
 
+Dedupe to remove cases where reviews have the same `user_id` and `item_id`.
+
+```{r}
+df <- df %>% group_by(user_id, item_id) %>% filter(row_number(item_id) == 1) %>% ungroup()
+```
 
 ## Additional Attributes
 
@@ -93,15 +103,13 @@ tbl_cache(sc, "data_t")
 df_t
 ```
 
-Verify latter query worked correctly, and table cached correctly, by filtering on specific values:
+Verify latter query worked correctly, and table cached correctly, by filtering on specific values. (cache tested by seeing if `sql_render` queries explicitly from `data_t` instead of a temp)
 
 ```{r}
 sql_render(df_t %>% filter(user_id == "A3BUDYITWUSIS7"))
 df_t %>% filter(user_id == "A3BUDYITWUSIS7") %>% collect()
 df_t %>% filter(item_id == "0739048287") %>% collect()
 ```
-
-
 
 # Exploratory Analysis
 
@@ -111,7 +119,7 @@ Average item rating by type.
 df_agg <- df_t %>%
             group_by(category) %>%
             summarize(count=n(), avg_rating = mean(rating)) %>%
-            arrange(desc(avg_rating)) %>%
+            arrange(desc(count)) %>%
             collect()
 
 df_agg
@@ -230,7 +238,7 @@ Merge the 2 charts together in a density plot.
 temp <- (df_agg_users %>% mutate(category="Users", norm=count_avg/sum(count_avg))) %>% union_all(df_agg_items %>% mutate(category="Items", norm=count_avg/sum(count_avg)))
 
 plot <- ggplot(temp, aes(x=avg_rating, y=norm, fill=category)) +
-          geom_density(stat="identity", alpha=0.75, bw=0.2, size=0.25) +
+          geom_density(stat="identity", alpha=0.75, size=0.25) +
           fte_theme() +
           theme(legend.title = element_blank(), legend.position="top", legend.direction="horizontal", legend.key.width=unit(0.5, "cm"), legend.key.height=unit(0.25, "cm"), axis.title.y=element_blank(), axis.text.y=element_blank()) +
           scale_fill_manual(values=c('#27ae60', '#2980b9')) +
@@ -244,6 +252,11 @@ max_save(plot, "user_item_histogram", "Amazon")
 # Per-Category Analysis
 
 # Rating Breakdown Across *n*th Rating
+
+```{r}
+rank_colors = c(brewer.pal(9, "Reds")[c(7,6,5)],brewer.pal(9, "Greens")[c(6,7)])
+```
+
 
 Breakdown accross *n*th user rating.
 
@@ -263,7 +276,8 @@ plot <- ggplot(df_breakdown_users, aes(x=user_nth, y=count, fill=as.factor(ratin
           geom_bar(stat="identity", position = "fill") +
           fte_theme() +
           scale_y_continuous(labels = percent) +
-  theme(legend.title = element_blank(), legend.position="top", legend.direction="horizontal", legend.key.width=unit(0.5, "cm"), legend.key.height=unit(0.25, "cm")) +
+  theme(legend.title = element_blank(), legend.position="top", legend.direction="horizontal", legend.key.width=unit(0.5, "cm"), legend.key.height=unit(0.0, "cm"), plot.title=element_text(vjust=0, hjust=0.5), legend.margin=margin(0, 0, -0.2, 0, "cm")) +
+  scale_fill_manual(values=rank_colors, labels = c("1 Star", "2 Stars", "3 Stars", "4 Stars", "5 Stars")) +
           labs(title="Distribution of Average User Ratings for Amazon Products", x="Average User Ratings for Amazon Products (5 Ratings Minimum)", y="# of Users")
 
 max_save(plot, "user_nth_breakdown", "Amazon")
@@ -289,8 +303,9 @@ plot <- ggplot(df_breakdown_items, aes(x=item_nth, y=count, fill=as.factor(ratin
           geom_bar(stat="identity", position = "fill") +
           fte_theme() +
           scale_y_continuous(labels = percent) +
-  theme(legend.title = element_blank(), legend.position="top", legend.direction="horizontal", legend.key.width=unit(0.5, "cm"), legend.key.height=unit(0.25, "cm")) +
-          labs(title="Distribution of Average User Ratings for Amazon Products", x="Average User Ratings for Amazon Products (5 Ratings Minimum)", y="# of Users")
+  theme(legend.title = element_blank(), legend.position="top", legend.direction="horizontal", legend.key.width=unit(0.5, "cm"), legend.key.height=unit(0.0, "cm"), plot.title=element_text(vjust=0, hjust=0.5), legend.margin=margin(0, 0, -0.2, 0, "cm")) +
+  scale_fill_manual(values=rank_colors, labels = c("1 Star", "2 Stars", "3 Stars", "4 Stars", "5 Stars")) +
+          labs(title=expression(paste("Breakdown of Ratings for Amazon Products by ", italic("n"), "th Item Rating Given")), x=expression(paste(italic("n"), "th Review for Item Given")), y="Proportion")
 
 max_save(plot, "item_nth_breakdown", "Amazon")
 ```
@@ -313,11 +328,12 @@ df_breakdown_time %>% head(10)
 
 ```{r}
 plot <- ggplot(df_breakdown_time, aes(x=date, y=count, fill=as.factor(rating))) +
-          geom_bar(stat="identity", position = "fill", width=32) +
+          geom_bar(stat="identity", position = "fill") +
           fte_theme() +
           scale_x_date(breaks=date_breaks('2 years'), date_labels = "%Y") +
           scale_y_continuous(labels = percent) +
-  theme(legend.title = element_blank(), legend.position="top", legend.direction="horizontal", legend.key.width=unit(0.5, "cm"), legend.key.height=unit(0.25, "cm")) +
+  theme(legend.title = element_blank(), legend.position="top", legend.direction="horizontal", legend.key.width=unit(0.5, "cm"), legend.key.height=unit(0.0, "cm"), plot.title=element_text(vjust=0, hjust=0.5), legend.margin=margin(0, 0, -0.2, 0, "cm")) +
+  scale_fill_manual(values=rank_colors, labels = c("1 Star", "2 Stars", "3 Stars", "4 Stars", "5 Stars")) +
           labs(title="Distribution of Average User Ratings for Amazon Products", x="Average User Ratings for Amazon Products (5 Ratings Minimum)", y="# of Users")
 
 max_save(plot, "time_breakdown", "Amazon")
@@ -336,7 +352,6 @@ df_breakdown_category <- df_t %>%
 
 df_breakdown_category %>% head(10)
 
-
 df_breakdown_category_avg  <- df_t %>%
             group_by(category) %>%
             summarize(avg_rating = mean(rating), sd_mean = sd(rating)/sqrt(n())) %>%
@@ -344,7 +359,6 @@ df_breakdown_category_avg  <- df_t %>%
             collect()
 
 df_breakdown_category_avg
-
 ```
 
 ```{r}
@@ -355,12 +369,12 @@ plot <- ggplot(df_breakdown_category, aes(x=category, y=count, fill=as.factor(ra
           fte_theme() +
           coord_flip() +
           scale_y_continuous(labels = percent) +
-  theme(legend.title = element_blank(), legend.position="top", legend.direction="horizontal", legend.key.width=unit(0.5, "cm"), legend.key.height=unit(0.25, "cm")) +
-          labs(title="Distribution of Average User Ratings for Amazon Products", x="Average User Ratings for Amazon Products (5 Ratings Minimum)", y="# of Users")
+  theme(legend.title = element_blank(), legend.position="top", legend.direction="horizontal", legend.key.width=unit(0.5, "cm"), legend.key.height=unit(0.0, "cm"), plot.title=element_text(vjust=0, hjust=1.5), legend.margin=margin(0, 0, -0.2, -3, "cm"), axis.title.y=element_blank()) +
+  scale_fill_manual(values=rank_colors, labels = c("1 Star", "2 Stars", "3 Stars", "4 Stars", "5 Stars")) +
+          labs(title="Breakdown of Amazon Ratings Given, by Product Category", y="Proportion")
 
-max_save(plot, "category_breakdown", "Amazon")
+max_save(plot, "category_breakdown", "Amazon", h=6, tall=T)
 ```
-
 
 ![](category_breakdown.png)
 
@@ -370,7 +384,7 @@ max_save(plot, "category_breakdown", "Amazon")
 
 Create a 4GB RAMdisk (on OSX) for fastest writes during shuffles / spare the life of the SSDs.
 
-Removed because Spark wants *much* more than 4GB!
+Removed because Spark wants *much* more than 4GB! (final dataset required 12GB scratch)
 
 ```{r, eval=FALSE}
 ram_size_GB <- 4
@@ -434,7 +448,7 @@ tbl_uncache(sc, "load")
 tbl_uncache(sc, "temp")
 ```
 
-## Dedupe
+## Dedupe (on Timestamp)
 
 This was a dedupe to remove cases where reviews by a person had the same timestamp; the true cause of that behavior was the Day truncation of the timestamp.
 
