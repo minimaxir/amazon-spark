@@ -12,7 +12,7 @@ output:
     toc_float: yes
 ---
 
-This R Notebook is the complement to my blog post [Network Visualization of Breached Internet Services Using HaveIBeenPwned Data](http://minimaxir.com/2016/12/pwned-network/).
+This R Notebook is the complement to my blog post [Playing with 80 Million Amazon Product Review Ratings Using Apache Spark](http://minimaxir.com/2017/01/amazon-spark/).
 
 This notebook is licensed under the MIT License. If you use the code or data visualization designs contained within this notebook, it would be greatly appreciated if proper attribution is given back to this notebook and/or myself. Thanks! :)
 
@@ -435,7 +435,7 @@ plot <- ggplot(df_breakdown_items, aes(x=item_nth, y=count, fill=as.factor(ratin
           geom_bar(stat="identity", position = "fill") +
           fte_theme() +
           scale_y_continuous(labels = percent) +
-  theme(legend.title = element_blank(), legend.position="top", legend.direction="horizontal", legend.key.width=unit(0.5, "cm"), legend.key.height=unit(0.0, "cm"), plot.title=element_text(vjust=0, hjust=0.5), legend.margin=margin(0, 0, -0.2, 0, "cm")) +
+  theme(legend.title = element_blank(), legend.position="top", legend.direction="horizontal", legend.key.width=unit(0.5, "cm"), legend.key.height=unit(0.0, "cm"), plot.title=element_text(vjust=0, hjust=0.75), legend.margin=margin(0, 0, -0.2, 0, "cm")) +
   scale_fill_manual(values=rank_colors, labels = c("1 Star", "2 Stars", "3 Stars", "4 Stars", "5 Stars")) +
           labs(title=expression(paste("Breakdown of Ratings for Amazon Products by ", italic("n"), "th Item Rating Given")), x=expression(paste(italic("n"), "th Review for Item Given")), y="Proportion")
 
@@ -587,3 +587,15 @@ This was a dedupe to remove cases where reviews by a person had the same timesta
 ```{r, eval=FALSE}
 df <- df %>% group_by(user_id, timestamp) %>% filter(row_number(timestamp) == 1) %>% ungroup()
 ```
+
+# LICENSE
+
+The MIT License (MIT)
+
+Copyright (c) 2017 Max Woolf
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
