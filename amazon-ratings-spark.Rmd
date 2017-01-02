@@ -200,6 +200,7 @@ plot <- ggplot(df_temp, aes(x=category, y=avg_rating)) +
           geom_text(aes(label=sprintf("%0.2f", avg_rating)), color="white", hjust=1.25, family="Open Sans Condensed Bold") +
           fte_theme() +
           coord_flip() +
+          scale_y_continuous(limits = c(1,5), oob = rescale_none) +
    theme(plot.title=element_text(vjust=0, hjust=1), axis.title.y=element_blank()) +
           labs(title="Average Rating Score Given For Amazon Reviews, by Product Category", y="Avg. Rating For Reviews Given in Category")
 
@@ -373,7 +374,7 @@ temp <- (df_agg_users %>% mutate(category="Users", norm=count_avg/sum(count_avg)
 plot <- ggplot(temp, aes(x=avg_rating, y=norm, fill=category)) +
           geom_density(stat="identity", alpha=0.75, size=0.25) +
           fte_theme() +
-          theme(legend.title = element_blank(), legend.position="top", legend.direction="horizontal", legend.key.width=unit(0.5, "cm"), legend.key.height=unit(0.25, "cm"), axis.title.y=element_blank(), axis.text.y=element_blank()) +
+          theme(legend.title = element_blank(), legend.position="top", legend.direction="horizontal", legend.key.width=unit(0.5, "cm"), legend.key.height=unit(0.0, "cm"), plot.title=element_text(vjust=0, hjust=0.5), legend.margin=margin(0, 0, -0.2, 0, "cm"), axis.text.y = element_blank(), axis.title.y=element_blank()) +
           scale_fill_manual(values=c('#27ae60', '#2980b9')) +
           labs(title="Distributions of Overall Ratings for Users and Amazon Products", x="Overall Ratings (5 Ratings Minimum)")
 
