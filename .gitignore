@@ -2,8 +2,6 @@
 .Rhistory
 .RData
 .Ruserdata
-*.nb.html
 *.log
 log*
 .vscode
-*.png
