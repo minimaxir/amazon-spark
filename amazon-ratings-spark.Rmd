@@ -1,7 +1,7 @@
 ---
-title: "Network Visualization of Breached Internet Services Using HaveIBeenPwned Data"
+title: "Playing with 80 Million Amazon Product Review Ratings Using Apache Spark"
 author: "Max Woolf (@minimaxir)"
-date: "December 19th, 2016"
+date: "January 2nd, 2017"
 output:
   html_notebook:
     highlight: tango
@@ -73,10 +73,12 @@ Add columns representing the timestamp as appropriate date/time values.
 
 To convert an <int> timestamp to a <string> represting the timestamp, use `from_unixtime` (via [Stack Overflow](http://stackoverflow.com/a/37569855)). Day of week requires a [special function](http://stackoverflow.com/questions/25006607/how-to-get-day-of-week-in-sparksql).
 
-The time zone is in the time zone of the system running it (in my case, PST).
+The time zone is in the time zone of the system running it (in my case, PST [GMT-7]). To compensate, I add an offset of 7+1 hours (due to Daylight Savings Time).
 
 ```{r}
-df <- df %>% mutate(timestamp_f = from_unixtime(timestamp))
+hours_offset <- 8
+
+df <- df %>% mutate(timestamp_f = from_unixtime(timestamp + hours_offset*60*60))
 
 df <- df %>% mutate(hour = hour(timestamp_f),
                     dayofweek = date_format(timestamp_f, 'EEEE'),
@@ -113,17 +115,98 @@ df_t %>% filter(item_id == "0739048287") %>% collect()
 
 # Exploratory Analysis
 
+## Authors
+
+Number of Unique authors:
+
+```{r}
+df_user_review_counts <- df_t %>%
+                          group_by(user_id) %>%
+                          summarize(num_reviews=n()) %>%
+                          group_by(num_reviews) %>%
+                          summarize(total=n()) %>%
+                          arrange(num_reviews) %>%
+                          collect()
+
+df_user_review_counts %>% head(100)
+```
+
+There are **`r df_user_review_counts %>% select(total) %>% sum() %>% format(big.mark=",")`** unique users in this dataset. **`r (df_user_review_counts$total[1] / (df_user_review_counts %>% select(total) %>% sum())) %>% percent()`** have only left one review.
+
+```{r}
+df_temp <- df_user_review_counts %>%
+              mutate(norm = total/sum(total), prop = cumsum(norm)) %>%
+              filter(num_reviews <= 50)
+
+plot <- ggplot(df_temp, aes(x=num_reviews, y=prop)) +
+          geom_line(color="#2980b9") +
+          fte_theme() +
+          scale_y_continuous(labels = percent, limits=c(0,1)) +
+          labs(title="Cumulative Proportion of # Amazon Reviews Given by User", x="# Reviews Given By User", y="Cumulative Proportion of All Amazon Reviewers")
+
+max_save(plot, "user_count_cum", "Amazon")
+```
+
+![](user_count_cum.png)
+
+```{r}
+df_item_review_counts <- df_t %>%
+                          group_by(item_id) %>%
+                          summarize(num_reviews=n()) %>%
+                          group_by(num_reviews) %>%
+                          summarize(total=n()) %>%
+                          arrange(num_reviews) %>%
+                          collect()
+
+df_item_review_counts %>% head(100)
+```
+
+There are **`r df_item_review_counts %>% select(total) %>% sum() %>% format(big.mark=",")`** unique items in this dataset.  **`r (df_item_review_counts$total[1] / (df_item_review_counts %>% select(total) %>% sum())) %>% percent()`** have only left one review.
+
+```{r}
+df_temp <- df_item_review_counts %>%
+              mutate(norm = total/sum(total), prop = cumsum(norm)) %>%
+              filter(num_reviews <= 50)
+
+plot <- ggplot(df_temp, aes(x=num_reviews, y=prop)) +
+          geom_line(color="#27ae60") +
+          fte_theme() +
+          scale_y_continuous(labels = percent, limits=c(0,1)) +
+          labs(title="Cumulative Proportion of # Reviews Given For Product", x="# Reviews Given For Product", y="Cumulative Proportion of All Amazon Products")
+
+max_save(plot, "item_count_cum", "Amazon")
+```
+
+![](item_count_cum.png)
+
 Average item rating by type.
 
 ```{r}
 df_agg <- df_t %>%
             group_by(category) %>%
-            summarize(count=n(), avg_rating = mean(rating)) %>%
-            arrange(desc(count)) %>%
+            summarize(count = n(), avg_rating = mean(rating)) %>%
+            arrange(desc(avg_rating)) %>%
             collect()
 
 df_agg
 ```
+
+```{r}
+df_temp <- df_agg
+df_temp$category <- factor(df_temp$category, levels=rev(df_temp$category))
+
+plot <- ggplot(df_temp, aes(x=category, y=avg_rating)) +
+          geom_bar(stat="identity", fill="#e67e22", alpha=0.9) +
+          geom_text(aes(label=sprintf("%0.2f", avg_rating)), color="white", hjust=1.25, family="Open Sans Condensed Bold") +
+          fte_theme() +
+          coord_flip() +
+   theme(plot.title=element_text(vjust=0, hjust=1), axis.title.y=element_blank()) +
+          labs(title="Average Rating Score Given For Amazon Reviews, by Product Category", y="Avg. Rating For Reviews Given in Category")
+
+max_save(plot, "avg_rating_desc", "Amazon", h=6, tall=T)
+```
+
+![](avg_rating_desc.png)
 
 Average rating by *n*th user review.
 
@@ -151,7 +234,7 @@ df_agg <- df_t %>%
 df_agg
 ```
 
-Aggregate by Day of Week and Hour. Unfortunately, this confirms that timestamps are truncated to Day, making the Hour useless, and Day of Week, at the least, has no impact on rating.
+Aggregate by Day of Week and Hour. Unfortunately, this confirms that timestamps are truncated to Day, making the Hour useless, and Day of Week, at the least, has no impact on average rating.
 
 ```{r}
 df_agg <- df_t %>%
@@ -163,6 +246,8 @@ df_agg <- df_t %>%
 df_agg
 ```
 
+## Time
+
 Aggregate by Month and Year .
 
 ```{r}
@@ -172,6 +257,23 @@ df_agg <- df_t %>%
             summarize(count=n(), avg_rating = mean(rating)) %>%
             arrange(year, month) %>%
             collect()
+
+df_agg
+```
+
+Aggregate by Day of year. Can subset the formatted timestamp since no date column. Remove 1999 and 2014 since partial years.
+
+There appear to be data irregularities causing dates like January 9th to appear, and more aggresive filtering on years changes the order completely. Therefor, this cannot be trusted or used in the post.
+
+```{r}
+df_agg <- df_t %>%
+            filter(year >= 2000, year < 2014) %>%
+            mutate(date = substr(timestamp_f, 6, 5)) %>%
+            group_by(date) %>%
+            summarize(count=n(), avg_rating = mean(rating)) %>%
+            arrange(desc(count)) %>%
+            collect() %>%
+            mutate(norm = round(count/sum(count), 5))
 
 df_agg
 ```
@@ -193,12 +295,28 @@ df_agg_users <- df_t %>%
 df_agg_users
 ```
 
+Get average of averages, on the given filter.
+
+```{r}
+agg_users_true <- df_t %>%
+            group_by(user_id) %>%
+            summarize(count=n(), avg_rating = mean(rating)) %>%
+            filter(count >= 5) %>%
+            ungroup() %>%
+            summarize(avg = mean(avg_rating)) %>%
+            collect()
+
+agg_users_true
+```
+
+
 ```{r}
 plot <- ggplot(df_agg_users, aes(x=avg_rating, y=count_avg)) +
           geom_bar(stat="identity", fill='#2980b9') +
+          geom_vline(xintercept=agg_users_true %>% unlist(), linetype="dashed") +
           fte_theme() +
           scale_y_continuous(labels = comma) +
-          labs(title="Distribution of Average User Ratings for Amazon Products", x="Average User Ratings for Amazon Products (5 Ratings Minimum)", y="# of Users")
+          labs(title="Distribution of Average Ratings by User, for Amazon Products", x="Average Rating for Amazon Products Given By User (5 Ratings Minimum)", y="Count of Users")
 
 max_save(plot, "user_histogram", "Amazon")
 ```
@@ -220,12 +338,27 @@ df_agg_items <- df_t %>%
 df_agg_items
 ```
 
+Get average of averages, on the given filter.
+
+```{r}
+agg_items_true <- df_t %>%
+            group_by(item_id) %>%
+            summarize(count=n(), avg_rating = mean(rating)) %>%
+            filter(count >= 5) %>%
+            ungroup() %>%
+            summarize(avg = mean(avg_rating)) %>%
+            collect()
+
+agg_items_true
+```
+
 ```{r}
 plot <- ggplot(df_agg_items, aes(x=avg_rating, y=count_avg)) +
           geom_bar(stat="identity", fill='#27ae60') +
+          geom_vline(xintercept=agg_items_true %>% unlist(), linetype="dashed") +
           fte_theme() +
           scale_y_continuous(labels = comma) +
-          labs(title="Distribution of Average Ratings on Amazon Products", x="Average User Amazon Product Ratings (5 Ratings Minimum)", y="# of Users")
+          labs(title="Distribution of Overall Ratings on Amazon Products", x="Overall Amazon Product Rating (5 Ratings Minimum)", y="Count of Products")
 
 max_save(plot, "item_histogram", "Amazon")
 ```
@@ -242,14 +375,12 @@ plot <- ggplot(temp, aes(x=avg_rating, y=norm, fill=category)) +
           fte_theme() +
           theme(legend.title = element_blank(), legend.position="top", legend.direction="horizontal", legend.key.width=unit(0.5, "cm"), legend.key.height=unit(0.25, "cm"), axis.title.y=element_blank(), axis.text.y=element_blank()) +
           scale_fill_manual(values=c('#27ae60', '#2980b9')) +
-          labs(title="Distribution of Average Ratings on Amazon Products", x="Average User Amazon Product Ratings (5 Ratings Minimum)")
+          labs(title="Distributions of Overall Ratings for Users and Amazon Products", x="Overall Ratings (5 Ratings Minimum)")
 
 max_save(plot, "user_item_histogram", "Amazon")
 ```
 
 ![](user_item_histogram.png)
-
-# Per-Category Analysis
 
 # Rating Breakdown Across *n*th Rating
 
@@ -332,9 +463,9 @@ plot <- ggplot(df_breakdown_time, aes(x=date, y=count, fill=as.factor(rating))) 
           fte_theme() +
           scale_x_date(breaks=date_breaks('2 years'), date_labels = "%Y") +
           scale_y_continuous(labels = percent) +
-  theme(legend.title = element_blank(), legend.position="top", legend.direction="horizontal", legend.key.width=unit(0.5, "cm"), legend.key.height=unit(0.0, "cm"), plot.title=element_text(vjust=0, hjust=0.5), legend.margin=margin(0, 0, -0.2, 0, "cm")) +
+  theme(legend.title = element_blank(), legend.position="top", legend.direction="horizontal", legend.key.width=unit(0.5, "cm"), legend.key.height=unit(0.0, "cm"), plot.title=element_text(vjust=0, hjust=1), legend.margin=margin(0, 0, -0.2, 0, "cm")) +
   scale_fill_manual(values=rank_colors, labels = c("1 Star", "2 Stars", "3 Stars", "4 Stars", "5 Stars")) +
-          labs(title="Distribution of Average User Ratings for Amazon Products", x="Average User Ratings for Amazon Products (5 Ratings Minimum)", y="# of Users")
+          labs(title="Ratings Breakdown for Reviews Given on Amazon Products by Month", x="Month", y="Proportion")
 
 max_save(plot, "time_breakdown", "Amazon")
 ```
@@ -452,6 +583,6 @@ tbl_uncache(sc, "temp")
 
 This was a dedupe to remove cases where reviews by a person had the same timestamp; the true cause of that behavior was the Day truncation of the timestamp.
 
-```{r}
+```{r, eval=FALSE}
 df <- df %>% group_by(user_id, timestamp) %>% filter(row_number(timestamp) == 1) %>% ungroup()
 ```
