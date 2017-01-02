@@ -35,7 +35,7 @@ sessionInfo()
 
 Note: I added `sparklyr.shell.driver-memory: 8G` to my Spark configuration profile to ensure there is enough memory for the entire dataset to fit in it for a single-client user. (otherwise it will write a LOT of data to disk!)
 
-Usable memory is half the drver memory (since data is replicated 1x), so that config setting will fit 4 GB of data.
+Usable memory is half the drver memory (since data is replicated 1x), so that config setting will fit 4 GB of data. (in theory; it will still write to disk often even if there is free memory available due to Spark's architecture)
 
 I use a 128GB Flash drive for the `spark.local.dir` as a scratch for Shuffle Write when necessary. (note; has 60MB/s write, so it will bottleneck on insane writes). However, it will not destroy valuable SSDs. Comment out the line if that is not an issue.
 
@@ -73,7 +73,7 @@ Add columns representing the timestamp as appropriate date/time values.
 
 To convert an <int> timestamp to a <string> represting the timestamp, use `from_unixtime` (via [Stack Overflow](http://stackoverflow.com/a/37569855)). Day of week requires a [special function](http://stackoverflow.com/questions/25006607/how-to-get-day-of-week-in-sparksql).
 
-The time zone is in the time zone of the system running it (in my case, PST [GMT-7]). To compensate, I add an offset of 7+1 hours (due to Daylight Savings Time).
+The time zone is in the time zone of the system running it (in my case, PST [GMT-7]). To compensate, I add an offset of 7+1 hours (the +1 due to Daylight Savings Time).
 
 ```{r}
 hours_offset <- 8
@@ -88,7 +88,7 @@ df <- df %>% mutate(hour = hour(timestamp_f),
 
 Append columns corresponding to the fact that a given rating is the user's *n*th rating, and the item's *n*th rating.
 
-Because the timestamps are truncated to Day, ties are possible. If a tie is present, give the ranking the same *n*th value, since it's better than losing date.
+Because the timestamps are truncated to Day, ties are possible. If a tie is present, give the ranking the same *n*th value, since it's better than omitting data.
 
 ```{r}
 df <- df %>% group_by(user_id) %>% mutate(user_nth = min_rank(timestamp)) %>% ungroup()
@@ -105,7 +105,7 @@ tbl_cache(sc, "data_t")
 df_t
 ```
 
-Verify latter query worked correctly, and table cached correctly, by filtering on specific values. (cache tested by seeing if `sql_render` queries explicitly from `data_t` instead of a temp)
+Verify latter query worked correctly, and table cached correctly, by filtering on specific values. (cache tested by seeing if `sql_render` queries explicitly from `data_t` instead of a temp table)
 
 ```{r}
 sql_render(df_t %>% filter(user_id == "A3BUDYITWUSIS7"))
@@ -264,7 +264,7 @@ df_agg
 
 Aggregate by Day of year. Can subset the formatted timestamp since no date column. Remove 1999 and 2014 since partial years.
 
-There appear to be data irregularities causing dates like January 9th to appear, and more aggresive filtering on years changes the order completely. Therefor, this cannot be trusted or used in the post.
+There appear to be data irregularities causing dates like January 9th to appear, and more aggresive filtering on years changes the order completely. Therefor, this cannot be trusted or used in the blog post.
 
 ```{r}
 df_agg <- df_t %>%
@@ -369,7 +369,7 @@ max_save(plot, "item_histogram", "Amazon")
 Merge the 2 charts together in a density plot.
 
 ```{r}
-temp <- (df_agg_users %>% mutate(category="Users", norm=count_avg/sum(count_avg))) %>% union_all(df_agg_items %>% mutate(category="Items", norm=count_avg/sum(count_avg)))
+temp <- (df_agg_users %>% mutate(category="Users", norm=count_avg/sum(count_avg))) %>% union_all(df_agg_items %>% mutate(category="Products", norm=count_avg/sum(count_avg)))
 
 plot <- ggplot(temp, aes(x=avg_rating, y=norm, fill=category)) +
           geom_density(stat="identity", alpha=0.75, size=0.25) +
@@ -408,9 +408,9 @@ plot <- ggplot(df_breakdown_users, aes(x=user_nth, y=count, fill=as.factor(ratin
           geom_bar(stat="identity", position = "fill") +
           fte_theme() +
           scale_y_continuous(labels = percent) +
-  theme(legend.title = element_blank(), legend.position="top", legend.direction="horizontal", legend.key.width=unit(0.5, "cm"), legend.key.height=unit(0.0, "cm"), plot.title=element_text(vjust=0, hjust=0.5), legend.margin=margin(0, 0, -0.2, 0, "cm")) +
+  theme(legend.title = element_blank(), legend.position="top", legend.direction="horizontal", legend.key.width=unit(0.5, "cm"), legend.key.height=unit(0.0, "cm"), plot.title=element_text(vjust=0, hjust=1), legend.margin=margin(0, 0, -0.2, 0, "cm")) +
   scale_fill_manual(values=rank_colors, labels = c("1 Star", "2 Stars", "3 Stars", "4 Stars", "5 Stars")) +
-          labs(title="Distribution of Average User Ratings for Amazon Products", x="Average User Ratings for Amazon Products (5 Ratings Minimum)", y="# of Users")
+          labs(title=expression(paste("Breakdown of Amazon Ratings Given by Users, by ", italic("n"), "th Rating Given")), x=expression(paste(italic("n"), "th Rating Given by User")), y="Proportion")
 
 max_save(plot, "user_nth_breakdown", "Amazon")
 ```
